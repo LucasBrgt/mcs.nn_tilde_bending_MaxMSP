@@ -4,7 +4,7 @@ This fork gives you acces to parameters of the models used inside mcs.nn~ with M
 
 This work is based on the modified codes for PureData of Błażej Kotowski that you can find [here](https://github.com/blazejkotowski/nn_tilde_bending).
 
-Original code goes to Antoine Cailon, Axel Chemla--Romeu-Santos and the Acids Team at Ircam taht you can find [here](https://github.com/acids-ircam/nn_tilde).
+Original code goes to Antoine Cailon, Axel Chemla--Romeu-Santos and the Acids Team at Ircam that you can find [here](https://github.com/acids-ircam/nn_tilde).
 
 ## Accessible Functions
 
