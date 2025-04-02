@@ -45,7 +45,7 @@ void Backend::perform(std::vector<float *> in_buffer,
   cat_tensor_in = cat_tensor_in.select(-1, -1);
   cat_tensor_in = cat_tensor_in.permute({1, 0, 2});
   // std::cout << cat_tensor_in.size(0) << ";" << cat_tensor_in.size(1) << ";" << cat_tensor_in.size(2) << std::endl;
-  // for (int i = 0; i < cat_tensor_in.size(1); i++ ) 
+  // for (int i = 0; i < cat_tensor_in.size(1); i++ )
     // std::cout << cat_tensor_in[0][i][0] << ";";
   // std::cout << std::endl;
 
@@ -99,6 +99,17 @@ void Backend::perform(std::vector<float *> in_buffer,
 
 int Backend::load(std::string path) {
   try {
+    if (!std::filesystem::exists(path)) {
+      throw "path not found";
+      return false;
+    }
+    std::ifstream model_file(path);
+    if (!model_file.good()) {
+      throw "can't open file";
+      return false;
+    }
+    model_file.close();
+    
     auto model = torch::jit::load(path);
     model.eval();
     model.to(m_device);
@@ -110,11 +121,15 @@ int Backend::load(std::string path) {
 
     m_available_methods = get_available_methods();
     m_path = path;
-    return 0;
-  } catch (const std::exception &e) {
-    std::cerr << e.what() << '\n';
-    return 1;
-  }
+
+  } catch (const std::exception& e) {
+        std::cerr << "Exception dans `Backend::load()` : " << e.what() << std::endl;
+        return 1;
+  } catch (...) {
+        std::cerr << "Exception inconnue dans `Backend::load()` !" << std::endl;
+        return 1;
+  } 
+  return 0;
 }
 
 int Backend::reload() {
@@ -284,6 +299,7 @@ std::string Backend::get_attribute_as_string(std::string attribute_name) {
 void Backend::set_attribute(std::string attribute_name,
                             std::vector<std::string> attribute_args) {
   // find setter
+  std::cout << "set_attribute: entering the function" << std::endl;
   std::string attribute_setter_name = "set_" + attribute_name;
   try {
     std::unique_lock<std::mutex> model_lock(m_model_mutex);
@@ -302,10 +318,12 @@ void Backend::set_attribute(std::string attribute_name,
     throw "parameters to set attribute " + attribute_name +
         " not found in model";
   }
+  std::cout << "set_attribute: found setter and params" << std::endl;
   // process inputs
   std::vector<c10::IValue> setter_inputs = {};
   for (int i = 0; i < setter_params.size(0); i++) {
     int current_id = setter_params[i].item().toInt();
+    std::cout << "current_id : " << current_id << std::endl;
     switch (current_id) {
     // bool case
     case 0:
@@ -317,6 +335,7 @@ void Backend::set_attribute(std::string attribute_name,
       break;
     // float case
     case 2:
+      std::cout << "to_float : " << attribute_args[i] << std::endl;
       setter_inputs.push_back(c10::IValue(to_float(attribute_args[i])));
       break;
     // str case
@@ -371,6 +390,91 @@ int Backend::get_higher_ratio() {
   return higher_ratio;
 }
 
+
+std::vector<std::string> Backend::get_available_layers() {
+    std::vector<std::string> layers;
+    if (!m_loaded) { // Vérification explicite
+        std::cerr << "Modèle non chargé!" << std::endl;
+        return layers;
+    }
+    std::unique_lock<std::mutex> model_lock(m_model_mutex); // Verrou tjs actif
+    try {
+        for (const auto &layer : m_model.named_parameters()) {
+            if (!layer.name.empty()) { // Filtre les noms vides
+                layers.push_back(layer.name);
+            }
+        }
+    } catch (const std::exception &e) {
+        std::cerr << "Erreur dans get_available_layers: " << e.what() << std::endl;
+        model_lock.unlock(); // Libération explicite
+        return layers;
+    }
+    model_lock.unlock(); // Libération redondante pour sécurité
+    return layers;
+}
+
+
+std::vector<float> Backend::get_layer_weights(std::string layer_name) {
+    try {
+        std::unique_lock<std::mutex> model_lock(m_model_mutex);
+        torch::Tensor m_tensor;
+        
+        bool layer_found = false;
+        
+        for (const auto &layer : m_model.named_parameters()) {
+            if (layer.name == layer_name) {
+                m_tensor = layer.value.contiguous().to(CPU);
+                layer_found = true;
+                break;
+            }
+        }
+        if (!layer_found) {
+            throw std::runtime_error("Layer '" + layer_name + "' not found.");
+        }
+        
+        auto m_weights = std::vector(m_tensor.data_ptr<float>(), m_tensor.data_ptr<float>()+m_tensor.numel());
+        return m_weights;
+    } catch (const std::exception &e) {
+        std::cerr << "Error in get_layer_weights: " << e.what() << std::endl;
+        return {};
+    }
+}
+
+void Backend::set_layer_weights(std::string layer_name,
+                                std::vector<float> weights) {
+    std::cout << "set_layer_weights: entering the function" << std::endl;
+      try {
+          std::unique_lock<std::mutex> model_lock(m_model_mutex);
+          bool layer_found = false;
+          
+          for (const auto &layer : m_model.named_parameters()) {
+              if (layer.name == layer_name) {
+                  layer_found = true;
+                  
+                  if (weights.size() != layer.value.numel()) {
+                      throw std::runtime_error("Size mismatch: Expected " + std::to_string(layer.value.numel()) + ", but got " + std::to_string(weights.size()));
+                  }
+                  
+                  torch::NoGradGuard no_grad;
+                  torch::Tensor new_weights = torch::from_blob(
+                          const_cast<void*>(static_cast<const void*>(weights.data())),
+                          layer.value.sizes(),
+                          torch::TensorOptions().dtype(torch::kFloat32)
+                  );
+                  layer.value.copy_(new_weights.clone());
+                  std::cout << "set_layer_weights: weights copied" << std::endl;
+                  break;
+              }
+          }
+          if (!layer_found) {
+              std::cerr << "Layer '" << layer_name << "' not found!" << std::endl;
+          }
+          
+      } catch (const std::exception &e) {
+          std::cerr << "Erreur dans set_layer_weights: " << e.what() <<std::endl;
+      }
+}
+
 bool Backend::is_loaded() { return m_loaded; }
 
 void Backend::use_gpu(bool value) {
@@ -390,4 +494,41 @@ void Backend::use_gpu(bool value) {
     m_device = CPU;
   }
   m_model.to(m_device);
+}
+
+#ifdef USE_CUDA
+#include <c10/cuda/CUDACachingAllocator.h>
+#endif
+
+Backend::~Backend() {
+    std::unique_lock<std::mutex> model_lock(m_model_mutex);
+
+    if (m_loaded) {
+        try {
+            switch (m_device) {
+                case torch::kCUDA:
+#ifdef USE_CUDA
+                    if (torch::hasCUDA()) {
+                        torch::cuda::synchronize();
+                        c10::cuda::CUDACachingAllocator::emptyCache();
+                    }
+#endif
+                    break;
+                case torch::kMPS:
+                    if (torch::hasMPS()) {
+                    }
+                    break;
+                case torch::kCPU:
+                default:
+                    at::set_num_threads(1);
+                    break;
+            }
+            m_model = torch::jit::Module();    
+            m_loaded = 0;
+
+        } catch (const std::exception& e) {
+            std::cerr << "Exception dans Backend::~Backend(): " << e.what() << std::endl;
+        }
+    }
+    model_lock.unlock();
 }
