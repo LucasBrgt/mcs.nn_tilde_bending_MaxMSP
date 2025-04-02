@@ -9,16 +9,11 @@ if (APPLE)
         set(CMAKE_OSX_ARCHITECTURES ${CMAKE_HOST_SYSTEM_PROCESSOR})
     endif()
     message("CMAKE_OSX_ARCHITECTURES: ${CMAKE_OSX_ARCHITECTURES}")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
 endif()
 
 add_subdirectory(backend) # DEEP LEARNING BACKEND
 
-if ((NOT ("${PUREDATA_INCLUDE_DIR}" STREQUAL "")) OR (UNIX AND NOT APPLE))
-    add_subdirectory(frontend/puredata/nn_tilde) # PURE DATA EXTERNAL
-endif()
-
 if(APPLE OR MSVC)
-    add_subdirectory(frontend/maxmsp/nn_tilde) # MAX MSP EXTERNAL
-    add_subdirectory(frontend/maxmsp/mc.nn_tilde) # MAX MSP EXTERNAL
     add_subdirectory(frontend/maxmsp/mcs.nn_tilde) # MAX MSP EXTERNAL
 endif()
