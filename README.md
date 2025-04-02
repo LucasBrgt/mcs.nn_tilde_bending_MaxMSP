@@ -1,6 +1,6 @@
-# mcs.nn~bending for MaxMSP
+# mcs.nn~ bending for MaxMSP
 
-This fork gives you acces to parameters of the models used inside mcs.nn~.
+This fork gives you acces to parameters of the models used inside mcs.nn~ with MaxMSP.
 
 This work is based on the modified codes for PureData of Błażej Kotowski that you can find [here](https://github.com/blazejkotowski/nn_tilde_bending).
 
