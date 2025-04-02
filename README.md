@@ -12,17 +12,21 @@ Original code goes to Antoine Cailon, Axel Chemla--Romeu-Santos and the Acids Te
 
 <img src="/assets/Load.png">   
 
+
 - **layers** : recover a list of all the layers of the loaded neural network.
 
 <img src="/assets/Layers.png">
+
 
 - **get_weights *layer_name*** : recover a list of all the parameters of a given layer. Because Max is limited to lists of size 32767, a sampling method is applied for lists that exceed this size. You can choose between three modes of interpolation with the attribute *downsample_mode*. For better compatibility with Max for Live, lists are sent by chunks of 8192 to avoid crashes.
 
 <img src="/assets/Get.png">
 
+
 - **set_weights *layer_name* *list of weights*** : overwrite parameters of a given layen. As get method can reduce the size of a layer, if the function detects a mismatch between the message from Max and the model then it will upsample the list.
 
 <img src="/assets/Set.png">
+
 
 - **reload** : invert changes made on the model
 
