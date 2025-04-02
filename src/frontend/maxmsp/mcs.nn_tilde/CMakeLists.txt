@@ -6,9 +6,8 @@ cmake_minimum_required(VERSION 3.0)
 set(C74_MIN_API_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../min-api)
 include(${C74_MIN_API_DIR}/script/min-pretarget.cmake)
 
-
 if (APPLE)
-	set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0")
+	set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
 endif()
 
 #############################################################
@@ -19,6 +18,7 @@ endif()
 include_directories( 
 	"${C74_INCLUDES}"
 )
+
 find_package(Torch REQUIRED)
 
 set(
@@ -37,15 +37,26 @@ if (UNIX)
 	add_definitions(-DVERSION="${VERSION}")
 endif()
 
-add_library( 
-	${PROJECT_NAME} 
-	MODULE
-	${SOURCE_FILES}
+add_library(
+    ${PROJECT_NAME}
+    MODULE
+    ${SOURCE_FILES}
 )
-target_link_libraries(${PROJECT_NAME} PRIVATE backend)
+
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    BUNDLE TRUE
+    SUFFIX ".mxo"
+)
+
+target_link_libraries(
+    ${PROJECT_NAME}
+    PRIVATE
+    backend
+    ${C74_MIN_API_DIR}
+    ${TORCH_LIBRARIES}
+)
 
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
-
 
 if (APPLE) # SEARCH FOR TORCH DYLIB IN THE LOADER FOLDER
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -63,6 +74,8 @@ add_custom_command(
 		COMMAND cp "${TORCH_INSTALL_PREFIX}/lib/*.dylib" "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${${PROJECT_NAME}_EXTERN_OUTPUT_NAME}.mxo/Contents/MacOS/" 
 		COMMENT "Copy Torch Libraries" 
 	)
+ 
+
 
 if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
 	add_custom_command( 
@@ -73,6 +86,7 @@ if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
 	)
 endif()
 endif()
+
 
 if (MSVC)
 	set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 20)
