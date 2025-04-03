@@ -31,3 +31,36 @@ Original code goes to Antoine Cailon, Axel Chemla--Romeu-Santos and the Acids Te
 - **reload** : invert changes made on the model
 
 ---
+
+# Build Instructions from main 
+
+## macOS
+
+- Download the latest libtorch (CPU) [here](https://pytorch.org/get-started/locally/) and unzip it to a known directory
+- Run the following commands:
+
+```bash
+git clone https://github.com/LucasBrgt/mcs.nn_tilde_bending_MaxMSP --recursive
+cd nn_tilde
+mkdir build
+cd build
+cmake ../src/ -DCMAKE_PREFIX_PATH=/path/to/libtorch -DCMAKE_BUILD_TYPE=Release
+make
+```
+
+## Windows
+
+- Download Libtorch (CPU) and dependencies [here](https://pytorch.org/get-started/locally/) and unzip to a known directory.
+- Install Visual Studio and the C++ tools
+- Run the following commands:
+
+```bash
+git clone https://github.com/LucasBrgt/mcs.nn_tilde_bending_MaxMSP --recurse-submodules
+cd nn_tilde
+mkdir build
+cd build
+cmake ..\src -A x64 -DCMAKE_PREFIX_PATH="<unzipped libtorch directory>" -DPUREDATA_INCLUDE_DIR="<path-to-pd/src>" -DPUREDATA_BIN_DIR="<path-to-pd/bin>"
+cmake --build . --config Release
+```
+
+---
