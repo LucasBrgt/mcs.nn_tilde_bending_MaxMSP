@@ -10,7 +10,7 @@ Original code goes to Antoine Cailon, Axel Chemla--Romeu-Santos and the Acids Te
 
 - **load *model* *method*** : add the possibility to load a model on the fly (buffer and batches will be the ones originally initialized or by default 2048 and 1).
 
-<img src="/assets/Load.png">   
+<img src="/assets/Load.png" width="200">   
 &nbsp;
 
 - **layers** : recover a list of all the layers of the loaded neural network.
