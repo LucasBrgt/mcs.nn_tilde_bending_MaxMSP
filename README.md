@@ -44,7 +44,7 @@ git clone https://github.com/LucasBrgt/mcs.nn_tilde_bending_MaxMSP --recursive
 cd mcs.nn_tilde_bending_MaxMSP
 mkdir build
 cd build
-cmake ../src/ -DCMAKE_PREFIX_PATH=/path/to/libtorch -DCMAKE_BUILD_TYPE=Release
+cmake ../src/ -DCMAKE_PREFIX_PATH=/path/to/libtorch -DCMAKE_BUILD_TYPE=Release -DVERSION="1.5.7"
 make
 ```
 
