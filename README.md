@@ -41,7 +41,7 @@ Original code goes to Antoine Cailon, Axel Chemla--Romeu-Santos and the Acids Te
 
 ```bash
 git clone https://github.com/LucasBrgt/mcs.nn_tilde_bending_MaxMSP --recursive
-cd nn_tilde
+cd mcs.nn_tilde_bending_MaxMSP
 mkdir build
 cd build
 cmake ../src/ -DCMAKE_PREFIX_PATH=/path/to/libtorch -DCMAKE_BUILD_TYPE=Release
@@ -56,7 +56,7 @@ make
 
 ```bash
 git clone https://github.com/LucasBrgt/mcs.nn_tilde_bending_MaxMSP --recurse-submodules
-cd nn_tilde
+cd mcs.nn_tilde_bending_MaxMSP
 mkdir build
 cd build
 cmake ..\src -A x64 -DCMAKE_PREFIX_PATH="<unzipped libtorch directory>" -DPUREDATA_INCLUDE_DIR="<path-to-pd/src>" -DPUREDATA_BIN_DIR="<path-to-pd/bin>"
