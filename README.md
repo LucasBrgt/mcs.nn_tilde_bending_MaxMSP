@@ -1,4 +1,4 @@
-# mcs.nn~ bending for MaxMSP
+# _mcs.nn~ Bending for MaxMSP_
 
 This fork gives you acces to parameters of the models used inside mcs.nn~ with MaxMSP.
 
