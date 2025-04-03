@@ -27,14 +27,14 @@ SOURCE_FILES
 )
 
 if (UNIX)
+	message(${VERSION})
+	add_definitions(-DVERSION="${VERSION}")
 	execute_process(
 			COMMAND git describe --tags
 			WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
 			OUTPUT_VARIABLE VERSION
 			OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
-	message(${VERSION})
-	add_definitions(-DVERSION="${VERSION}")
 endif()
 
 add_library(
