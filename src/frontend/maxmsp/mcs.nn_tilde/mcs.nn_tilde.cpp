@@ -49,6 +49,7 @@ private:
         std::atomic<bool> m_is_destroying {false};
         std::atomic<bool> m_loading{false};
         std::atomic<bool> processing_active {true};
+        std::atomic<bool> enable {false};
         std::thread m_load_thread;
         std::thread m_weights_thread;
         std::thread m_layers_thread;
@@ -108,285 +109,256 @@ public:
         void operator()(audio_bundle input, audio_bundle output);
         void perform(audio_bundle input, audio_bundle output);
         std::vector<float> resample_vector(const std::vector<float>& input, size_t target_size, int mode);
+        int downsample_mode = 0;
 
     
-  // ONLY FOR DOCUMENTATION
-  argument<symbol> path_arg{this, "model path",
-                            "Absolute path to the pretrained model."};
-  argument<symbol> method_arg{this, "method",
-                              "Name of the method to call during synthesis."};
-  argument<int> batches_arg{this, "batches", "Number of batches"};
+        // ONLY FOR DOCUMENTATION
+        argument<symbol> path_arg{this, "model path",
+                                "Absolute path to the pretrained model."};
+        argument<symbol> method_arg{this, "method",
+                                  "Name of the method to call during synthesis."};
+        argument<int> batches_arg{this, "batches", "Number of batches"};
 
-  argument<int> buffer_arg{
-      this, "buffer size",
-      "Size of the internal buffer (can't be lower than the method's ratio)."};
+        argument<int> buffer_arg{
+          this, "buffer size",
+          "Size of the internal buffer (can't be lower than the method's ratio)."};
 
-  // ENABLE / DISABLE ATTRIBUTE
-  attribute<bool> enable{this, "enable", true,
-                         description{"Enable / disable tensor computation"}};
+        // ENABLE / DISABLE GPU
+        attribute<bool> gpu{this, "gpu", false,
+                            description{"Enable / disable gpu usage when available"},
+                            setter{[this](const c74::min::atoms &args,
+                                          const int inlet) -> c74::min::atoms {
+                              if (m_is_backend_init)
+                                m_model->use_gpu(bool(args[0]));
+                              return args;
+                            }}};
 
-  // ENABLE / DISABLE GPU
-  attribute<bool> gpu{this, "gpu", false,
-                        description{"Enable / disable gpu usage when available"},
-                        setter{[this](const c74::min::atoms &args,
-                                      const int inlet) -> c74::min::atoms {
-                          if (m_is_backend_init)
-                            m_model->use_gpu(bool(args[0]));
-                          return args;
-                        }}};
+        // BOOT STAMP
+        message<> maxclass_setup{
+          this, "maxclass_setup",
+          [this](const c74::min::atoms &args, const int inlet) -> c74::min::atoms {
+            cout << "nn~ " << VERSION << " - torch " << TORCH_VERSION;
+            c74::max::t_class *c = args[0];
+            c74::max::class_addmethod(
+                c, (c74::max::method)simplemc_multichanneloutputs,
+                "multichanneloutputs", c74::max::A_CANT, 0);
+            c74::max::class_addmethod(c, (c74::max::method)simplemc_inputchanged,
+                                      "inputchanged", c74::max::A_CANT, 0);
+            return {};
+        }};
 
-  attribute<int> downsample_mode{this, "downsample_mode", 0,
-                        description{"Mode de downsampling pour les paramètre du modèle: 0=linéaire, 1=log, 2=cosine"}};
-
-  // BOOT STAMP
-  message<> maxclass_setup{
-      this, "maxclass_setup",
-      [this](const c74::min::atoms &args, const int inlet) -> c74::min::atoms {
-        cout << "nn~ " << VERSION << " - torch " << TORCH_VERSION;
-        c74::max::t_class *c = args[0];
-        c74::max::class_addmethod(
-            c, (c74::max::method)simplemc_multichanneloutputs,
-            "multichanneloutputs", c74::max::A_CANT, 0);
-        c74::max::class_addmethod(c, (c74::max::method)simplemc_inputchanged,
-                                  "inputchanged", c74::max::A_CANT, 0);
-        return {};
-      }};
-    
-    //GENERIC
-    message<> load { this, "load", "load a .ts model file",
-          MIN_FUNCTION {
-            if (args.size() < 1) {
-              cerr << "No file specified" << endl;
-              return{};
-            }
-            if (args.size() < 2) {
-              cerr << "No method specified" << endl;
-              return{};
-            }
-            if (args.size() > 2) {
-              cerr << "Message load should contain a model name and a method" << endl;
-              return{};
-            }
-
-            std::string model_path = std::string(args[0]);
-            if (model_path.substr(model_path.length() - 3) != ".ts") {
-              model_path = model_path + ".ts";
-            }
-
-            m_path = path(model_path);
-            m_method = std::string(args[1]);
-
-            if (m_loading) {
-                cerr << "Load déjà en cours, requête ignorée" << endl;
-                return {};
-            }
-
-            if (m_load_thread.joinable()) {
-                m_load_thread.join(); 
-                m_load_thread = std::thread();
-            }
-
-            m_loading = true;  
-
-            m_load_thread = std::thread([this]() {
-                try {
-                    this->load_model(std::string(m_path), m_method);
-                } catch (const std::exception& e) {
-                    cerr << "Exception in load_model()" << endl;
+        message<> run{ this, "run", "Enable or disable tensor calculation",
+            MIN_FUNCTION{
+                if (args.size() <1) {
+                    cerr << "enable: requires an argument (0 or 1)" << endl;
+                    return {};
                 }
-            });
+                enable = bool(args[0]);
+                return {};
+            }
+        };
 
-            return{};
-        }
-    };
-    
-    message<> get{this, "get",
-        MIN_FUNCTION {
-            if (args.size() < 1) {
-                cerr << "get: must be given an attribute name" << endl;
+        message<> mode{ this, "mode", "Mode de downsampling pour les paramètre du modèle: 0=linéaire, 1=log, 2=cosine",
+            MIN_FUNCTION{
+                if (args.size() <1) {
+                    cerr << "downsample_mode: requires an argument (0 or 1)" << endl;
+                    return {};
+                }
+                downsample_mode = int(args[0]);
                 return {};
             }
-            if (args.size() > 1) {
-                cerr << "get: must be given one attribute name" << endl;
-                return {};
-            }
-            symbol attribute_name = args[0];
-            string attribute_value = m_model->get_attribute_as_string(attribute_name);
-            m_attribute_outlet->send("attribute", attribute_value);
-            return {};
-        }
-    };
-     
-     
-    //GET LAYERS
-    message<> layers{this, "layers", MIN_FUNCTION{
-        if (!m_model || !m_is_backend_init || !m_model->is_loaded()) {
-            cerr << "Modèle non initialisé !" << endl;
-            return {};
-        }
-        
-        if (m_layers_thread.joinable()) {
-            m_layers_thread.join();
-        }
-        m_layers_thread = std::thread([this]() {
-            if (m_is_destroying) return;
-            try {
-                atoms output_atoms;
-                std::vector<std::string> layers = m_model->get_available_layers();
-                for (const auto& layer : layers) {
-                    if (!layer.empty()) {
-                        output_atoms.push_back(symbol(layer.c_str()));
+        };
+
+        message<> load { this, "load", "load a .ts model file",
+              MIN_FUNCTION {
+                if (args.size() < 1) {
+                  cerr << "No file specified" << endl;
+                  return{};
+                }
+                if (args.size() < 2) {
+                  cerr << "No method specified" << endl;
+                  return{};
+                }
+                if (args.size() > 2) {
+                  cerr << "Message load should contain a model name and a method" << endl;
+                  return{};
+                }
+
+                std::string model_path = std::string(args[0]);
+                if (model_path.substr(model_path.length() - 3) != ".ts") {
+                  model_path = model_path + ".ts";
+                }
+
+                m_path = path(model_path);
+                m_method = std::string(args[1]);
+
+                if (m_loading) {
+                    cerr << "Load déjà en cours, requête ignorée" << endl;
+                    return {};
+                }
+
+                if (m_load_thread.joinable()) {
+                    m_load_thread.join(); 
+                    m_load_thread = std::thread();
+                }
+
+                m_loading = true;  
+
+                m_load_thread = std::thread([this]() {
+                    try {
+                        this->load_model(std::string(m_path), m_method);
+                    } catch (const std::exception& e) {
+                        cerr << "Exception in load_model()" << endl;
                     }
-                }
-                
-                {
-                    std::lock_guard<std::mutex> lock(m_cache_mutex);
-                    m_cached_layers_result = output_atoms;
-                }
-                if (m_is_destroying) return;
-                c74::max::clock_delay(m_clock_layers, 0);
-                
-            } catch (const std::exception& e) {
-                std::cerr << "Erreur dans 'layers': " << e.what() << std::endl;
+                });
+
+                return{};
             }
-        });
-        m_layers_thread.detach();
-        return {};
-    }};
-    
-    //GET LAYER WEIGHTS
-    message<> get_weights{this, "get_weights", "Retrieve the weights of a layer",
-        MIN_FUNCTION {
+        };
+
+        message<> get{this, "get",
+            MIN_FUNCTION {
+                if (args.size() < 1) {
+                    cerr << "get: must be given an attribute name" << endl;
+                    return {};
+                }
+                if (args.size() > 1) {
+                    cerr << "get: must be given one attribute name" << endl;
+                    return {};
+                }
+                symbol attribute_name = args[0];
+                string attribute_value = m_model->get_attribute_as_string(attribute_name);
+                m_attribute_outlet->send("attribute", attribute_value);
+                return {};
+            }
+        };
+         
+         
+        //GET LAYERS
+        message<> layers{this, "layers", MIN_FUNCTION{
             if (!m_model || !m_is_backend_init || !m_model->is_loaded()) {
                 cerr << "Modèle non initialisé !" << endl;
                 return {};
             }
-            if (args.empty()) {
-                cerr << "get_weights: must be given a layer name" << endl;
-                return {};
-            }
-            if (args.size() < 1 || args[0].a_type != c74::max::A_SYM) {
-                cerr << "get_weights() : Argument invalide !" << endl;
-                return {};
-            }
-            if (args.size() > 1) {
-                cerr << "get_weights() : should be given one argument !" << endl;
-                return {};
-            }
-            std::string layer_name_copy = args[0];
-            if (m_weights_thread.joinable()) {
-                m_weights_thread.join();
-            }
             
-            m_weights_thread = std::thread(get_weights_thread, this, layer_name_copy);
-            m_weights_thread.detach();
-            return {};
-        }};
-    
-    //SET LAYER WEIGHTS
-    message<> set_weights{this, "set_weights", "Set weights of a layer",
-        MIN_FUNCTION {
-            if (args.size() < 1 || static_cast<int>(args[0].type()) != c74::max::A_SYM) {
-                cerr << "set_weights: first argument must be a layer name (symbol)" << endl;
-                return {};
+            if (m_layers_thread.joinable()) {
+                m_layers_thread.join();
             }
-            std::string layer_name = args[0];
-            std::vector<float> layer_weights;
-            std::vector<float> upsampled;
-
-            for (size_t i = 1; i < args.size(); ++i) {
-                if (static_cast<int>(args[i].type()) != c74::max::A_FLOAT) {
-                    cerr << "set_weights: arguments must be floats" << endl;
-                    return{};
-                }
-                layer_weights.push_back(args[i]);
-            }
-            
-            if (layer_weights.empty()) {
-                cerr << "set_weights: no weights provided" << endl;
-                return {};
-            }
-            if (m_layer_sizes.find(layer_name) != m_layer_sizes.end()) {
-                size_t expected_size = m_layer_sizes[layer_name];
-                if (layer_weights.size() != expected_size) {
-                    upsampled = resample_vector(layer_weights, expected_size, downsample_mode);
-                } else { 
-                    upsampled = layer_weights;
-                };
-            } else {
-                cerr << "Unknown layer: " << layer_name << endl;
-                return {};
-            }
-            std::thread([this, layer_name, upsampled]() {
+            m_layers_thread = std::thread([this]() {
                 if (m_is_destroying) return;
                 try {
-                    std::lock_guard<std::mutex> lock(model_access_mutex);
-                    m_model->set_layer_weights(layer_name, upsampled);
+                    atoms output_atoms;
+                    std::vector<std::string> layers = m_model->get_available_layers();
+                    for (const auto& layer : layers) {
+                        if (!layer.empty()) {
+                            output_atoms.push_back(symbol(layer.c_str()));
+                        }
+                    }
+                    
+                    {
+                        std::lock_guard<std::mutex> lock(m_cache_mutex);
+                        m_cached_layers_result = output_atoms;
+                    }
+                    if (m_is_destroying) return;
+                    c74::max::clock_delay(m_clock_layers, 0);
+                    
+                } catch (const std::exception& e) {
+                    std::cerr << "Erreur dans 'layers': " << e.what() << std::endl;
                 }
-                catch (const std::exception& e) {
-                    std::cerr << "Exception in update_layer_weights_async: " << e.what() << std::endl;
-                }
-            }).detach();
-            
-            m_attribute_outlet->send("set");
-            return{};
-        }
-    };
+            });
+            m_layers_thread.detach();
+            return {};
+        }};
 
-    message<> anything{this, "anything", "callback for attributes",
-        MIN_FUNCTION{symbol attribute_name = args[0];
-            if (attribute_name == "reload") {
+        //GET LAYER WEIGHTS
+        message<> get_weights{this, "get_weights", "Retrieve the weights of a layer",
+            MIN_FUNCTION {
+                if (!m_model || !m_is_backend_init || !m_model->is_loaded()) {
+                    cerr << "Modèle non initialisé !" << endl;
+                    return {};
+                }
+                if (args.empty()) {
+                    cerr << "get_weights: must be given a layer name" << endl;
+                    return {};
+                }
+                if (args.size() < 1 || args[0].a_type != c74::max::A_SYM) {
+                    cerr << "get_weights() : Argument invalide !" << endl;
+                    return {};
+                }
+                if (args.size() > 1) {
+                    cerr << "get_weights() : should be given one argument !" << endl;
+                    return {};
+                }
+                std::string layer_name_copy = args[0];
+                if (m_weights_thread.joinable()) {
+                    m_weights_thread.join();
+                }
+                
+                m_weights_thread = std::thread(get_weights_thread, this, layer_name_copy);
+                m_weights_thread.detach();
+                return {};
+            }};
+
+        //SET LAYER WEIGHTS
+        message<> set_weights{this, "set_weights", "Set weights of a layer",
+            MIN_FUNCTION {
+                if (args.size() < 1 || static_cast<int>(args[0].type()) != c74::max::A_SYM) {
+                    cerr << "set_weights: first argument must be a layer name (symbol)" << endl;
+                    return {};
+                }
+                std::string layer_name = args[0];
+                std::vector<float> layer_weights;
+                std::vector<float> upsampled;
+
+                for (size_t i = 1; i < args.size(); ++i) {
+                    if (static_cast<int>(args[i].type()) != c74::max::A_FLOAT) {
+                        cerr << "set_weights: arguments must be floats" << endl;
+                        return{};
+                    }
+                    layer_weights.push_back(args[i]);
+                }
+                
+                if (layer_weights.empty()) {
+                    cerr << "set_weights: no weights provided" << endl;
+                    return {};
+                }
+                if (m_layer_sizes.find(layer_name) != m_layer_sizes.end()) {
+                    size_t expected_size = m_layer_sizes[layer_name];
+                    if (layer_weights.size() != expected_size) {
+                        upsampled = resample_vector(layer_weights, expected_size, downsample_mode);
+                    } else { 
+                        upsampled = layer_weights;
+                    };
+                } else {
+                    cerr << "Unknown layer: " << layer_name << endl;
+                    return {};
+                }
+                std::thread([this, layer_name, upsampled]() {
+                    if (m_is_destroying) return;
+                    try {
+                        std::lock_guard<std::mutex> lock(model_access_mutex);
+                        m_model->set_layer_weights(layer_name, upsampled);
+                    }
+                    catch (const std::exception& e) {
+                        std::cerr << "Exception in update_layer_weights_async: " << e.what() << std::endl;
+                    }
+                }).detach();
+                
+                m_attribute_outlet->send("set");
+                return{};
+            }
+        };
+
+        message<> reload{this, "reload", "reload backend model",
+            MIN_FUNCTION{
                 m_model->reload();
                 cout << "model reloaded" << endl;
                 m_attribute_outlet->send("reloaded");
-            } else if (attribute_name == "get_attributes") {
-                for (std::string attr : settable_attributes) {
-                    cout << attr << endl;
-                }
                 return {};
-            } else if (attribute_name == "get_methods") {
-                for (std::string method : m_model->get_available_methods())
-                    cout << method << endl;
-                return {};
-            } else if (attribute_name == "get") {
-                if (args.size() < 2) {
-                    cerr << "get must be given an attribute name" << endl;
-                    return {};
-                }
-                attribute_name = args[1];
-                if (m_model->has_settable_attribute(attribute_name)) {
-                    cout << attribute_name << ": "
-                    << m_model->get_attribute_as_string(attribute_name) << endl;
-                } else {
-                    cerr << "no attribute " << attribute_name << " found in model" << endl;
-                }
-                return {};
-            } else if (attribute_name == "set") {
-                if (args.size() < 3) {
-                    cerr << "set must be given an attribute name and corresponding arguments"
-                    << endl;
-                    return {};
-                }
-                attribute_name = args[1];
-                std::vector<std::string> attribute_args;
-                if (has_settable_attribute(attribute_name)) {
-                    for (int i = 2; i < args.size(); i++) {
-                        attribute_args.push_back(args[i]);
-                    }
-                    try {
-                        m_model->set_attribute(attribute_name, attribute_args);
-                    } catch (std::string message) {
-                        cerr << message << endl;
-                    }
-                } else {
-                    cerr << "model does not have attribute " << attribute_name << endl;
-                }
-            } else {
-                cerr << "no corresponding method for " << attribute_name << endl;
             }
-            return {};
-        }};
-  };
+        };
+ 
+};
 
 int mc_bnn_tilde::get_batches() { return m_batches; }
 
@@ -446,8 +418,6 @@ mc_bnn_tilde::mc_bnn_tilde(const atoms &args)
         m_result_available_lock(1),
         m_batches(1) {
 
-    enable = false;   
-
     m_clock_layers = c74::max::clock_new(this, (c74::max::method) &mc_bnn_tilde::send_layers_static);
     m_clock_weights = c74::max::clock_new(this, (c74::max::method) &mc_bnn_tilde::send_weights_static);
     m_clock_error = c74::max::clock_new(this, (c74::max::method) &mc_bnn_tilde::send_error_static);
@@ -461,10 +431,6 @@ mc_bnn_tilde::mc_bnn_tilde(const atoms &args)
     m_outlets.push_back(std::make_unique<outlet<>>(this, "model output", "multichannelsignal"));
     m_attribute_outlet = std::make_unique<outlet<>>(this, "Messages from model", "message");
     input_chans.push_back(1);
-
-    if (!args.size()) {
-    return;
-    }
 
     if (args.size() > 0) { // ONE ARGUMENT IS GIVEN
         auto model_path = std::string(args[0]);
@@ -490,10 +456,31 @@ mc_bnn_tilde::mc_bnn_tilde(const atoms &args)
 mc_bnn_tilde::~mc_bnn_tilde() {
     enable = false;
     m_is_destroying = true;
+    m_should_stop_perform_thread = true;
+    processing_active = false;
+
+    if (m_clock_layers) {
+        c74::max::clock_unset(m_clock_layers);
+        c74::max::object_free(m_clock_layers);
+        m_clock_layers = nullptr;
+    }
+    if (m_clock_weights) {
+        c74::max::clock_unset(m_clock_weights);
+        c74::max::object_free(m_clock_weights);
+        m_clock_weights = nullptr;
+    }
+    if (m_clock_error) {
+        c74::max::clock_unset(m_clock_error);
+        c74::max::object_free(m_clock_error);
+        m_clock_error = nullptr;
+    }
+
+
    {
            std::lock_guard<std::mutex> lock(m_model_mutex);
-           m_should_stop_perform_thread = true;
+           m_data_available_lock.try_acquire();
            m_data_available_lock.release();
+           m_result_available_lock.try_acquire();
            m_result_available_lock.release();
 
            if (m_compute_thread && m_compute_thread->joinable()) {
@@ -514,6 +501,11 @@ mc_bnn_tilde::~mc_bnn_tilde() {
                m_weights_thread.join();
            }
            m_weights_thread = std::thread();
+
+           m_in_buffer.reset();
+           m_out_buffer.reset();
+           m_in_model.clear();
+           m_out_model.clear();
 
            m_model.reset();
     }
@@ -582,9 +574,6 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
 
     try {
         initialize_after_load();
-        atoms in{ "m_in_dim" };
-        in.push_back(m_in_dim);
-        m_attribute_outlet->send(in);
 
     } catch (const std::exception& e) {
         cerr << "Erreur dans initialize_after_load : " << e.what() << endl;
@@ -592,6 +581,13 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
         m_loading = false;
         return;
     }
+
+    atoms in{ "m_in_dim" };
+    in.push_back(m_in_dim);
+    m_attribute_outlet->send(in);
+    atoms out{ "m_out_dim" };
+    in.push_back(m_out_dim);
+    m_attribute_outlet->send(out);
 
     m_attribute_outlet->send("loaded");
     m_loading = false;
@@ -626,8 +622,6 @@ void mc_bnn_tilde::initialize_after_load() {
     auto params = m_model->get_method_params(m_method);
     if (params.size() < 4) {
         cout << "Erreur : les paramètres du modèle sont incomplets !" << endl;
-    } else {
-        m_out_dim = params[2]; // Mise à jour correcte de m_out_dim
     }
     if (!params.size()) {
         error("method " + m_method + " not found !");
