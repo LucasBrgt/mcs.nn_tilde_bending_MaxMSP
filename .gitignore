@@ -8,4 +8,5 @@ src/tests
 src/docs
 *.ts
 dist/
-*.egg-info*_No_Git/
+*.egg-info
+_No_Git/
