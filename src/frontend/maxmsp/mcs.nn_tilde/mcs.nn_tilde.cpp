@@ -25,6 +25,7 @@ unsigned power_ceil(unsigned x) {
   return power;
 }
 
+
 long simplemc_multichanneloutputs(c74::max::t_object *x, long index,
                                   long count);
 long simplemc_inputchanged(c74::max::t_object *x, long index, long count);
@@ -46,6 +47,7 @@ private:
         std::mutex m_cache_mutex;
         std::mutex m_model_mutex;
         std::mutex model_access_mutex;
+        static std::mutex g_load_mutex;
         std::atomic<bool> m_is_destroying {false};
         std::atomic<bool> m_loading{false};
         std::atomic<bool> processing_active {true};
@@ -555,10 +557,13 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
     m_is_backend_init = true;
     
     try {
-        if (m_model->load(this->m_path) != 0) {
-            error("model loading failed");
-            m_loading = false;
+        {
+            std::lock_guard<std::mutex> loadLock(g_load_mutex);
+            if (m_model->load(this->m_path) != 0) {
+                error("model loading failed");
+                m_loading = false;
             return;
+            }
         }
     } catch (const std::exception& e) {
         cerr << "Exception dans m_model->load() : " << e.what() << endl;
@@ -847,7 +852,6 @@ void mc_bnn_tilde::operator()(audio_bundle input, audio_bundle output) {
 
 void mc_bnn_tilde::perform(audio_bundle input, audio_bundle output) {
   auto vec_size = input.frame_count();
-  std::lock_guard<std::mutex> lock(model_access_mutex);
 
   if (!m_model || !m_in_buffer || !m_in_buffer || !m_out_buffer || m_inlets.empty() || !processing_active) {
         fill_with_zero(output);
@@ -912,14 +916,9 @@ long simplemc_inputchanged(c74::max::t_object *x, long index, long count) {
   minwrap<mc_bnn_tilde> *ob = (minwrap<mc_bnn_tilde> *)(x);
   auto chan_number = ob->m_min_object.m_in_dim;
   ob->m_min_object.input_chans[index] = count;
-  /*if (chan_number != count) {
-    c74::max::object_error(
-        x, (std::string("invalid channel number for input ") +
-            std::to_string(index) + std::string("; should be ") +
-            std::to_string(chan_number))
-               .c_str());
-  }*/
   return false;
 }
+
+std::mutex mc_bnn_tilde::g_load_mutex;
 
 MIN_EXTERNAL(mc_bnn_tilde);
