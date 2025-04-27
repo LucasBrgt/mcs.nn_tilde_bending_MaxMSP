@@ -47,7 +47,6 @@ private:
         std::mutex m_cache_mutex;
         std::mutex m_model_mutex;
         std::mutex model_access_mutex;
-        static std::mutex g_load_mutex;
         std::atomic<bool> m_is_destroying {false};
         std::atomic<bool> m_loading{false};
         std::atomic<bool> processing_active {true};
@@ -200,19 +199,18 @@ public:
                 }
 
                 if (m_load_thread.joinable()) {
-                    m_load_thread.join(); 
-                    m_load_thread = std::thread();
+                    m_load_thread.join();
                 }
 
                 m_loading = true;  
 
-                m_load_thread = std::thread([this]() {
+                std::thread([this, path = std::string(m_path), method = m_method]() {
                     try {
-                        this->load_model(std::string(m_path), m_method);
+                        this->load_model(path, method);
                     } catch (const std::exception& e) {
                         cerr << "Exception in load_model()" << endl;
                     }
-                });
+                }).detach();
 
                 return{};
             }
@@ -388,7 +386,7 @@ void mc_bnn_tilde::model_perform_loop(mc_bnn_tilde *mc_nn_instance) {
 
   while (!mc_nn_instance->m_should_stop_perform_thread) {
     if (mc_nn_instance->m_data_available_lock.try_acquire_for(
-            std::chrono::milliseconds(50))) {
+            std::chrono::milliseconds(5))) {
         if (mc_nn_instance->m_should_stop_perform_thread)
             break;
         {
@@ -522,8 +520,9 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
     m_is_backend_init = false;
 
     // Verrouiller les mutex dans l'ordre pour éviter tout deadlock
-    std::unique_lock<std::mutex> modelLock(m_model_mutex);
-    std::unique_lock<std::mutex> accessLock(model_access_mutex);
+    std::unique_lock<std::mutex> modelLock(m_model_mutex, std::defer_lock);
+    std::unique_lock<std::mutex> accessLock(model_access_mutex, std::defer_lock);
+    std::lock(modelLock, accessLock);
 
     // Mettre à jour le chemin et la méthode du modèle
     this->m_path = model_path;
@@ -534,7 +533,13 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
     m_data_available_lock.release();
     m_result_available_lock.release();
     if (m_compute_thread && m_compute_thread->joinable()) {
-        m_compute_thread->join();
+        auto ft = std::async(std::launch::async, [&] {
+            return m_compute_thread->join();
+        });
+        auto status = ft.wait_for(std::chrono::milliseconds(300));
+        if (status != std::future_status::ready) {
+            cerr << "Warning: compute thread did not terminate properly" << endl;
+        }
         m_compute_thread.reset();
     }
     if (m_layers_thread.joinable()) {
@@ -547,33 +552,34 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
     }
     m_weights_thread = std::thread();
 
-    m_in_buffer.reset();
-    m_out_buffer.reset();
+    m_in_buffer = nullptr;
+    m_out_buffer = nullptr;
     m_in_model.clear();
     m_out_model.clear();
     m_model.reset();
+    m_model = nullptr;
 
     m_model = std::make_unique<Backend>();
     m_is_backend_init = true;
     
     try {
-        {
-            std::lock_guard<std::mutex> loadLock(g_load_mutex);
             if (m_model->load(this->m_path) != 0) {
                 error("model loading failed");
                 m_loading = false;
-            return;
+                processing_active = true;
+                return;
             }
-        }
     } catch (const std::exception& e) {
         cerr << "Exception dans m_model->load() : " << e.what() << endl;
         error("mcs.nn~: Exception in load_model()");
         m_loading = false;
+        processing_active = true;
         return;
     } catch (...) {
         cerr << "Exception inconnue dans m_model->load()" << endl;
         error("mcs.nn~: unknown exception in load_model()");
         m_loading = false;
+        processing_active = true;
         return;
     }
 
@@ -590,9 +596,6 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
     atoms in{ "m_in_dim" };
     in.push_back(m_in_dim);
     m_attribute_outlet->send(in);
-    atoms out{ "m_out_dim" };
-    in.push_back(m_out_dim);
-    m_attribute_outlet->send(out);
 
     m_attribute_outlet->send("loaded");
     m_loading = false;
@@ -602,6 +605,16 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
     accessLock.unlock();
 
     m_should_stop_perform_thread = false;
+
+    try {
+        while(m_data_available_lock.try_acquire_for(std::chrono::milliseconds(1))) {}
+    } catch(...) {}
+
+    try {
+        while(m_result_available_lock.try_acquire_for(std::chrono::milliseconds(1))) {}
+    } catch(...) {}
+
+    m_result_available_lock.release();
 
     if (m_use_thread) {
         m_compute_thread = std::make_unique<std::thread>(model_perform_loop, this);
@@ -646,6 +659,7 @@ void mc_bnn_tilde::initialize_after_load() {
         m_layer_sizes[layer] = weights.size();
     }
     
+    
     m_in_dim = params[0];
     m_in_ratio = params[1];
     m_out_dim = params[2];
@@ -685,8 +699,6 @@ void mc_bnn_tilde::initialize_after_load() {
         m_out_buffer[i].initialize(m_buffer_size);
         m_out_model.push_back(std::make_unique<float[]>(m_buffer_size));
     }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
 };
 
@@ -829,13 +841,14 @@ bool mc_bnn_tilde::check_inputs() {
 
 void mc_bnn_tilde::operator()(audio_bundle input, audio_bundle output) {
   auto dsp_vec_size = output.frame_count();
-  std::lock_guard<std::mutex> lock(m_model_mutex);
 
   // CHECK IF MODEL IS LOADED AND ENABLED
   if (!m_model || !m_model->is_loaded() || !enable || !check_inputs()) {
     fill_with_zero(output);
     return;
   }
+
+  std::lock_guard<std::mutex> lock(m_model_mutex);
 
   // CHECK IF DSP_VEC_SIZE IS LARGER THAN BUFFER SIZE
   if (dsp_vec_size > m_buffer_size) {
@@ -853,7 +866,7 @@ void mc_bnn_tilde::operator()(audio_bundle input, audio_bundle output) {
 void mc_bnn_tilde::perform(audio_bundle input, audio_bundle output) {
   auto vec_size = input.frame_count();
 
-  if (!m_model || !m_in_buffer || !m_in_buffer || !m_out_buffer || m_inlets.empty() || !processing_active) {
+  if (!m_model || !m_in_buffer || !m_out_buffer || m_inlets.empty() || !processing_active) {
         fill_with_zero(output);
         return;
   }
@@ -863,7 +876,6 @@ void mc_bnn_tilde::perform(audio_bundle input, audio_bundle output) {
     for (int d(0); d < m_in_dim; d++) {
       auto in = input.samples(b * m_in_dim + d);
       m_in_buffer[d * get_batches() + b].put(in, vec_size);
-      std::cout << "populate batch " << b << "; channel " << d << " into buffer" <<  d * get_batches() + b << "; value : " << in[0] << std::endl;
     }
   }
 
@@ -919,6 +931,5 @@ long simplemc_inputchanged(c74::max::t_object *x, long index, long count) {
   return false;
 }
 
-std::mutex mc_bnn_tilde::g_load_mutex;
 
 MIN_EXTERNAL(mc_bnn_tilde);

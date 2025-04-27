@@ -1,14 +1,15 @@
 #pragma once
 #include <mutex>
+#include <unordered_map>
 #include <string>
 #include <torch/script.h>
 #include <torch/torch.h>
 #include <vector>
+#include <atomic>
 
 class Backend {
 protected:
   torch::jit::script::Module m_model;
-  int m_loaded;
   std::string m_path;
   std::mutex m_model_mutex;
   std::vector<std::string> m_available_methods;
@@ -35,8 +36,12 @@ public:
   int load(std::string path);
   int reload();
   bool is_loaded();
+  std::atomic<int> m_loaded;
   torch::jit::script::Module get_model() { return m_model; }
   void use_gpu(bool value);
+
+  static std::unordered_map<std::string, std::shared_ptr<std::mutex>> g_file_mutexes;
+  static std::mutex g_file_mutexes_map_mutex;
 
   std::vector<std::string> get_available_layers();
   std::vector<float> get_layer_weights(std::string layer_name);

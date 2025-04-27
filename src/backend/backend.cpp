@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iostream>
 #include <stdlib.h>
+#include <fstream>
 
 #define CPU torch::kCPU
 #define CUDA torch::kCUDA
@@ -11,6 +12,11 @@
 Backend::Backend() : m_loaded(0), m_device(CPU), m_use_gpu(false) {
   at::init_num_threads();
 }
+
+//Gestion des accès 
+std::unordered_map<std::string, std::shared_ptr<std::mutex>> Backend::g_file_mutexes;
+std::mutex Backend::g_file_mutexes_map_mutex;
+
 
 void Backend::perform(std::vector<float *> in_buffer,
                       std::vector<float *> out_buffer, int n_vec,
@@ -99,28 +105,32 @@ void Backend::perform(std::vector<float *> in_buffer,
 
 int Backend::load(std::string path) {
   try {
-    if (!std::filesystem::exists(path)) {
-      throw "path not found";
-      return false;
+    std::shared_ptr<std::mutex> file_mutex;
+    {
+        std::lock_guard<std::mutex> map_lock(g_file_mutexes_map_mutex);
+        auto it = g_file_mutexes.find(path);
+        if (it == g_file_mutexes.end()) {
+            file_mutex = std::make_shared<std::mutex>();
+            g_file_mutexes[path] = file_mutex;
+        } else {
+            file_mutex = it->second;
+        }
     }
-    std::ifstream model_file(path);
-    if (!model_file.good()) {
-      throw "can't open file";
-      return false;
-    }
-    model_file.close();
-    
+    std::lock_guard<std::mutex> file_lock(*file_mutex);
+
     auto model = torch::jit::load(path);
+
     model.eval();
     model.to(m_device);
 
-    std::unique_lock<std::mutex> model_lock(m_model_mutex);
-    m_model = model;
-    m_loaded = 1;
-    model_lock.unlock();
-
-    m_available_methods = get_available_methods();
-    m_path = path;
+    {
+      std::lock_guard<std::mutex> lock(m_model_mutex);
+      m_model = model;
+      m_available_methods = get_available_methods();
+      m_path = path;
+      m_loaded = 1;
+    }
+    return 0;
 
   } catch (const std::exception& e) {
         std::cerr << "Exception dans `Backend::load()` : " << e.what() << std::endl;
@@ -129,7 +139,7 @@ int Backend::load(std::string path) {
         std::cerr << "Exception inconnue dans `Backend::load()` !" << std::endl;
         return 1;
   } 
-  return 0;
+
 }
 
 int Backend::reload() {
@@ -158,17 +168,13 @@ std::vector<std::string> Backend::get_available_methods() {
   std::vector<std::string> methods;
   try {
     std::vector<c10::IValue> dumb_input = {};
-
-    std::unique_lock<std::mutex> model_lock(m_model_mutex);
     auto methods_from_model =
         m_model.get_method("get_methods")(dumb_input).toList();
-    model_lock.unlock();
 
     for (int i = 0; i < methods_from_model.size(); i++) {
       methods.push_back(methods_from_model.get(i).toStringRef());
     }
   } catch (...) {
-    std::unique_lock<std::mutex> model_lock(m_model_mutex);
     for (const auto &m : m_model.get_methods()) {
       try {
         auto method_params = m_model.attr(m.name() + "_params");
@@ -176,7 +182,6 @@ std::vector<std::string> Backend::get_available_methods() {
       } catch (...) {
       }
     }
-    model_lock.unlock();
   }
   return methods;
 }
