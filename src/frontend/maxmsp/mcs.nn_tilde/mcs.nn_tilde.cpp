@@ -204,13 +204,13 @@ public:
 
                 m_loading = true;  
 
-                std::thread([this, path = std::string(m_path), method = m_method]() {
+                m_load_thread = std::thread([this, path = std::string(m_path), method = m_method]() {
                     try {
                         this->load_model(path, method);
                     } catch (const std::exception& e) {
                         cerr << "Exception in load_model()" << endl;
                     }
-                }).detach();
+                });
 
                 return{};
             }
@@ -590,6 +590,7 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
         cerr << "Erreur dans initialize_after_load : " << e.what() << endl;
         c74::max::clock_delay(m_clock_error, 0);
         m_loading = false;
+        processing_active = true;
         return;
     }
 
@@ -843,7 +844,11 @@ void mc_bnn_tilde::operator()(audio_bundle input, audio_bundle output) {
   auto dsp_vec_size = output.frame_count();
 
   // CHECK IF MODEL IS LOADED AND ENABLED
-  if (!m_model || !m_model->is_loaded() || !enable || !check_inputs()) {
+  if (!m_model 
+        || !m_model->is_loaded() 
+        || !enable 
+        || !check_inputs()
+        || !processing_active) {
     fill_with_zero(output);
     return;
   }
