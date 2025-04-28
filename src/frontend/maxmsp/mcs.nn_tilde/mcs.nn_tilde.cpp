@@ -13,6 +13,10 @@
 #define VERSION "UNDEFINED"
 #endif
 
+namespace {
+    static std::mutex g_model_load_mutex;
+}
+
 using namespace c74::min;
 
 unsigned power_ceil(unsigned x) {
@@ -518,6 +522,8 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
     processing_active = false;
     enable = false;
     m_is_backend_init = false;
+
+    std::lock_guard<std::mutex> global_lock(g_model_load_mutex);
 
     // Verrouiller les mutex dans l'ordre pour éviter tout deadlock
     std::unique_lock<std::mutex> modelLock(m_model_mutex, std::defer_lock);
