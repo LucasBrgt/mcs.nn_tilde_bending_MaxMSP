@@ -15,6 +15,7 @@
 
 namespace {
     static std::mutex g_model_load_mutex;
+    static std::atomic<int> g_model_loading_counter {0};
 }
 
 using namespace c74::min;
@@ -374,6 +375,9 @@ void model_perform(mc_bnn_tilde *mc_nn_instance) {
   for (int c(0); c < mc_nn_instance->m_out_dim * num_batches; c++)
     out_model.push_back(mc_nn_instance->m_out_model[c].get());
 
+  if (!mc_nn_instance->m_model)
+      return;
+
   mc_nn_instance->m_model->perform(
       in_model, out_model, mc_nn_instance->m_buffer_size,
       mc_nn_instance->m_method, mc_nn_instance->get_batches());
@@ -393,12 +397,7 @@ void mc_bnn_tilde::model_perform_loop(mc_bnn_tilde *mc_nn_instance) {
             std::chrono::milliseconds(5))) {
         if (mc_nn_instance->m_should_stop_perform_thread)
             break;
-        {
-            std::lock_guard<std::mutex> lock(mc_nn_instance->m_model_mutex);
-            if (!mc_nn_instance->m_model)
-                break;
-        }
-        if (mc_nn_instance->m_should_stop_perform_thread)
+        if (!mc_nn_instance->m_model)
             break;
         mc_nn_instance->m_model->perform(
             in_model, out_model, mc_nn_instance->m_buffer_size,
@@ -524,6 +523,7 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
     m_is_backend_init = false;
 
     std::lock_guard<std::mutex> global_lock(g_model_load_mutex);
+    g_model_loading_counter.fetch_add(1, std::memory_order_relaxed);
 
     // Verrouiller les mutex dans l'ordre pour éviter tout deadlock
     std::unique_lock<std::mutex> modelLock(m_model_mutex, std::defer_lock);
@@ -599,6 +599,8 @@ void mc_bnn_tilde::load_model(const std::string& model_path, const std::string& 
         processing_active = true;
         return;
     }
+
+    g_model_loading_counter.fetch_sub(1, std::memory_order_relaxed);
 
     atoms in{ "m_in_dim" };
     in.push_back(m_in_dim);
@@ -849,17 +851,18 @@ bool mc_bnn_tilde::check_inputs() {
 void mc_bnn_tilde::operator()(audio_bundle input, audio_bundle output) {
   auto dsp_vec_size = output.frame_count();
 
+  std::lock_guard<std::mutex> lock(m_model_mutex);
+
   // CHECK IF MODEL IS LOADED AND ENABLED
   if (!m_model 
         || !m_model->is_loaded() 
         || !enable 
         || !check_inputs()
-        || !processing_active) {
+        || !processing_active
+        || g_model_loading_counter.load(std::memory_order_relaxed) > 0) {
     fill_with_zero(output);
     return;
   }
-
-  std::lock_guard<std::mutex> lock(m_model_mutex);
 
   // CHECK IF DSP_VEC_SIZE IS LARGER THAN BUFFER SIZE
   if (dsp_vec_size > m_buffer_size) {
@@ -877,7 +880,14 @@ void mc_bnn_tilde::operator()(audio_bundle input, audio_bundle output) {
 void mc_bnn_tilde::perform(audio_bundle input, audio_bundle output) {
   auto vec_size = input.frame_count();
 
-  if (!m_model || !m_in_buffer || !m_out_buffer || m_inlets.empty() || !processing_active) {
+  if (!m_model 
+    || !m_in_buffer 
+    || !m_out_buffer 
+    || m_inlets.empty() 
+    || m_in_model.empty() 
+    || m_out_model.empty() 
+    || !processing_active) 
+  {
         fill_with_zero(output);
         return;
   }

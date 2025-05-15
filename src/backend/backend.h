@@ -37,7 +37,6 @@ public:
   int reload();
   bool is_loaded();
   std::atomic<int> m_loaded;
-  torch::jit::script::Module get_model() { return m_model; }
   void use_gpu(bool value);
 
   static std::unordered_map<std::string, std::shared_ptr<std::mutex>> g_file_mutexes;

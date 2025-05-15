@@ -125,7 +125,7 @@ int Backend::load(std::string path) {
 
     {
       std::lock_guard<std::mutex> lock(m_model_mutex);
-      m_model = model;
+      m_model = std::move(model);
       m_available_methods = get_available_methods();
       m_path = path;
       m_loaded = 1;
